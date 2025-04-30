@@ -15,7 +15,7 @@ use tokio::{
     runtime::Runtime,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
-use egui::{ColorImage, TextureOptions};
+use egui::{ColorImage, TextureOptions, Visuals};
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]
@@ -31,9 +31,18 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "YouTube Downloader",
         options,
-        Box::new(|_cc| Box::new(MyApp::default())),
+        Box::new(|cc| {
+
+            let visuals = Visuals::dark();                        // ← switch to dark base
+            
+
+            cc.egui_ctx.set_visuals(visuals);
+
+            Box::new(MyApp::default())
+        }),
     )
 }
+
 
 #[derive(Clone)]
 enum DownloadStatus {
@@ -43,10 +52,8 @@ enum DownloadStatus {
 
 fn parse_progress_from_line(line: &str) -> Option<f32> {
     if let Some(rest) = line.strip_prefix("downloaded_bytes:") {
-        // rest might be " 62.0%"
         let trimmed = rest.trim();
         if let Some(number) = trimmed.strip_suffix('%') {
-            // number is "62.0"
             if let Ok(v) = number.trim().parse::<f32>() {
                 return Some(v / 100.0);
             }
@@ -54,7 +61,6 @@ fn parse_progress_from_line(line: &str) -> Option<f32> {
     }
     None
 }
-
 
 struct DownloadTask {
     title: String,
@@ -71,7 +77,7 @@ struct MyApp {
     downloads: Vec<DownloadTask>,
     thumbnails: HashMap<String, egui::TextureHandle>,
     thumbnail_results: Arc<Mutex<Vec<(String, ColorImage)>>>,
-    progress_rx: Option<UnboundedReceiver<(String, f32)>>,
+    progress_rxs: HashMap<String, UnboundedReceiver<f32>>, // ✅ changed from Option<Receiver>
 }
 
 impl Default for MyApp {
@@ -90,20 +96,23 @@ impl Default for MyApp {
             downloads: Vec::new(),
             thumbnails: HashMap::new(),
             thumbnail_results: Arc::new(Mutex::new(Vec::new())),
-            progress_rx: None,
+            progress_rxs: HashMap::new(), // ✅
         }
     }
 }
 
 impl App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        // 1️⃣ Process incoming progress updates on main thread
-        if let Some(rx) = &mut self.progress_rx {
-            while let Ok((id, prog)) = rx.try_recv() {
-                if let Some(task) = self.downloads.iter_mut().find(|t| t.video_id == id) {
-                    task.progress = prog;
-                    if prog >= 1.0 {
-                        task.status = DownloadStatus::Done;
+        // ✅ 1️⃣ Check all progress channels
+        for (id, rx) in self.progress_rxs.iter_mut() {
+            while let Ok(prog) = rx.try_recv() {
+                if let Some(task) = self.downloads.iter_mut().find(|t| &t.video_id == id) {
+                    // only increase, never go backwards
+                    if prog > task.progress {
+                        task.progress = prog;
+                        if task.progress >= 1.0 {
+                            task.status = DownloadStatus::Done;
+                        }
                     }
                 }
             }
@@ -126,6 +135,8 @@ impl App for MyApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    let mut to_remove = vec![];
+
                     for task in &self.downloads {
                         let status_text = match task.status {
                             DownloadStatus::Downloading => "⬇️ Downloading",
@@ -141,33 +152,42 @@ impl App for MyApp {
                                     ui.label(status_text);
                                     ui.add(egui::ProgressBar::new(task.progress).show_percentage());
                                     if matches!(task.status, DownloadStatus::Done) {
-                                        if ui.button("Open Folder").clicked() {
-                                            let folder = self.download_folder.clone();
-                                            std::thread::spawn(move || {
-                                                #[cfg(target_os = "windows")]
-                                                {
-                                                    let _ = std::process::Command::new("explorer")
-                                                        .arg(folder)
-                                                        .spawn();
-                                                }
-                                                #[cfg(target_os = "macos")]
-                                                {
-                                                    let _ = std::process::Command::new("open")
-                                                        .arg(folder)
-                                                        .spawn();
-                                                }
-                                                #[cfg(all(unix, not(target_os = "macos")))]
-                                                {
-                                                    let _ = std::process::Command::new("xdg-open")
-                                                        .arg(folder)
-                                                        .spawn();
-                                                }
-                                            });
-                                        }
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Open Folder").clicked() {
+                                                let folder = self.download_folder.clone();
+                                                std::thread::spawn(move || {
+                                                    #[cfg(target_os = "windows")]
+                                                    {
+                                                        let _ = std::process::Command::new("explorer").arg(folder).spawn();
+                                                    }
+                                                    #[cfg(target_os = "macos")]
+                                                    {
+                                                        let _ = std::process::Command::new("open").arg(folder).spawn();
+                                                    }
+                                                    #[cfg(all(unix, not(target_os = "macos")))]
+                                                    {
+                                                        let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
+                                                    }
+                                                });
+                                            }
+
+                                            // ✅ Remove Button
+                                            if ui.add(egui::Button::new("❌").fill(egui::Color32::RED)).clicked() {
+                                                to_remove.push(task.video_id.clone());
+                                            }
+                                        });
                                     }
                                 });
                             });
                         });
+                    }
+
+                    // ✅ Actually remove tasks after iterating
+                    if !to_remove.is_empty() {
+                        self.downloads.retain(|t| !to_remove.contains(&t.video_id));
+                        for id in to_remove {
+                            self.progress_rxs.remove(&id);
+                        }
                     }
                 });
         });
@@ -208,7 +228,6 @@ impl App for MyApp {
                 if let Some(video_id) = extract_video_id(&url) {
                     let title = format!("Video ID: {}", video_id);
 
-                    // 4.1 Push a new task
                     self.downloads.push(DownloadTask {
                         title: title.clone(),
                         video_id: video_id.clone(),
@@ -216,7 +235,7 @@ impl App for MyApp {
                         progress: 0.0,
                     });
 
-                    // 4.2 Fetch thumbnail in background
+                    // Spawn thumbnail fetcher
                     {
                         let id_c = video_id.clone();
                         let results = Arc::clone(&self.thumbnail_results);
@@ -232,11 +251,11 @@ impl App for MyApp {
                             });
                     }
 
-                    // 4.3 Setup progress channel
+                    // ✅ Create a new progress channel per video_id
                     let (tx, rx) = unbounded_channel();
-                    self.progress_rx = Some(rx);
+                    self.progress_rxs.insert(video_id.clone(), rx);
 
-                    // 4.4 Spawn download with real progress
+                    // Launch yt-dlp download
                     RUNTIME
                         .get()
                         .unwrap()
@@ -245,7 +264,6 @@ impl App for MyApp {
                             quality.clone(),
                             folder.clone(),
                             tx,
-                            video_id.clone(),
                         ));
                 }
 
@@ -267,10 +285,8 @@ async fn spawn_download(
     url: String,
     quality: String,
     download_folder: String,
-    progress_tx: UnboundedSender<(String, f32)>,
-    video_id: String,
+    progress_tx: UnboundedSender<f32>, // ✅ just progress
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. extract embedded yt-dlp
     let bin = if cfg!(target_os = "windows") { "yt-dlp.exe" } else { "yt-dlp" };
     let data = Asset::get(bin).ok_or("Missing yt-dlp")?;
     let tmp = std::env::temp_dir().join(bin);
@@ -281,7 +297,6 @@ async fn spawn_download(
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
     }
 
-    // 2. build args
     let mut args = vec!["-f".to_owned(), format!("best[height<={}]", match quality.as_str() {
         "1080p" => "1080",
         "720p" => "720",
@@ -291,32 +306,26 @@ async fn spawn_download(
         _ => "best",
     })];
 
-    // new, correct:
     args.push("--progress-template".to_owned());
-    // this expands to e.g. "downloaded_bytes:  62.0%"
-    // by pulling the _percent_str from the progress dict
     args.push("downloaded_bytes:%(progress._percent_str)s".to_owned());
     args.push("--newline".to_owned());
-
 
     args.push("-o".to_owned());
     args.push(format!("{}/%(title)s.%(ext)s", download_folder));
     args.push(url);
 
-    // 3. spawn process and read its stdout
     let mut child = Command::new(tmp)
         .args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
 
     let out = child.stdout.take().unwrap();
     let mut lines = BufReader::new(out).lines();
     while let Some(line) = lines.next_line().await? {
         println!("DBG> {}", line);
-
         if let Some(pct) = parse_progress_from_line(&line) {
-            let _ = progress_tx.send((video_id.clone(), pct));
+            let _ = progress_tx.send(pct);
         }
     }
     Ok(())
