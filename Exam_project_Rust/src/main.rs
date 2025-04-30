@@ -140,6 +140,31 @@ impl App for MyApp {
                                     ui.label(&task.title);
                                     ui.label(status_text);
                                     ui.add(egui::ProgressBar::new(task.progress).show_percentage());
+                                    if matches!(task.status, DownloadStatus::Done) {
+                                        if ui.button("Open Folder").clicked() {
+                                            let folder = self.download_folder.clone();
+                                            std::thread::spawn(move || {
+                                                #[cfg(target_os = "windows")]
+                                                {
+                                                    let _ = std::process::Command::new("explorer")
+                                                        .arg(folder)
+                                                        .spawn();
+                                                }
+                                                #[cfg(target_os = "macos")]
+                                                {
+                                                    let _ = std::process::Command::new("open")
+                                                        .arg(folder)
+                                                        .spawn();
+                                                }
+                                                #[cfg(all(unix, not(target_os = "macos")))]
+                                                {
+                                                    let _ = std::process::Command::new("xdg-open")
+                                                        .arg(folder)
+                                                        .spawn();
+                                                }
+                                            });
+                                        }
+                                    }
                                 });
                             });
                         });
