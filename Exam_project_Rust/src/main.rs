@@ -1,25 +1,26 @@
+mod thumbnail;
+mod downloader;
+mod progress;
+mod model;
+use model::{DownloadTask, DownloadStatus};
+
+use downloader::spawn_download;
+
+
 use eframe::{egui, App, Frame};
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
-use rust_embed::RustEmbed;
 use std::{
     collections::HashMap,
-    fs::File,
-    io::Write,
-    process::Stdio,
     sync::{Arc, Mutex},
 };
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::Command,
     runtime::Runtime,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{unbounded_channel, UnboundedReceiver},
 };
 use egui::{ColorImage, TextureOptions, Visuals};
 
-#[derive(RustEmbed)]
-#[folder = "assets/"]
-struct Asset;
+
 
 static RUNTIME: OnceCell<Arc<Runtime>> = OnceCell::new();
 
@@ -33,7 +34,7 @@ fn main() -> Result<(), eframe::Error> {
         options,
         Box::new(|cc| {
 
-            let visuals = Visuals::dark();                        // ← switch to dark base
+            let visuals = Visuals::dark();
             
 
             cc.egui_ctx.set_visuals(visuals);
@@ -41,32 +42,6 @@ fn main() -> Result<(), eframe::Error> {
             Box::new(MyApp::default())
         }),
     )
-}
-
-
-#[derive(Clone)]
-enum DownloadStatus {
-    Downloading,
-    Done,
-}
-
-fn parse_progress_from_line(line: &str) -> Option<f32> {
-    if let Some(rest) = line.strip_prefix("downloaded_bytes:") {
-        let trimmed = rest.trim();
-        if let Some(number) = trimmed.strip_suffix('%') {
-            if let Ok(v) = number.trim().parse::<f32>() {
-                return Some(v / 100.0);
-            }
-        }
-    }
-    None
-}
-
-struct DownloadTask {
-    title: String,
-    video_id: String,
-    status: DownloadStatus,
-    progress: f32,
 }
 
 struct MyApp {
@@ -244,7 +219,7 @@ impl App for MyApp {
                             .get()
                             .unwrap()
                             .spawn_blocking(move || {
-                                if let Some(img) = fetch_thumbnail(&id_c) {
+                                if let Some(img) = thumbnail::fetch_thumbnail(&id_c) {
                                     results.lock().unwrap().push((id_c.clone(), img));
                                     ctx_c.request_repaint();
                                 }
@@ -280,62 +255,3 @@ fn extract_video_id(url: &str) -> Option<String> {
     url.split("v=").nth(1).and_then(|s| s.split('&').next()).map(|s| s.to_string())
 }
 
-/// Downloads yt-dlp + parses progress
-async fn spawn_download(
-    url: String,
-    quality: String,
-    download_folder: String,
-    progress_tx: UnboundedSender<f32>, // ✅ just progress
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bin = if cfg!(target_os = "windows") { "yt-dlp.exe" } else { "yt-dlp" };
-    let data = Asset::get(bin).ok_or("Missing yt-dlp")?;
-    let tmp = std::env::temp_dir().join(bin);
-    if !tmp.exists() {
-        let mut f = File::create(&tmp)?;
-        f.write_all(&data.data)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-    }
-
-    let mut args = vec!["-f".to_owned(), format!("best[height<={}]", match quality.as_str() {
-        "1080p" => "1080",
-        "720p" => "720",
-        "480p" => "480",
-        "360p" => "360",
-        "Audio Only" => "bestaudio",
-        _ => "best",
-    })];
-
-    args.push("--progress-template".to_owned());
-    args.push("downloaded_bytes:%(progress._percent_str)s".to_owned());
-    args.push("--newline".to_owned());
-
-    args.push("-o".to_owned());
-    args.push(format!("{}/%(title)s.%(ext)s", download_folder));
-    args.push(url);
-
-    let mut child = Command::new(tmp)
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    let out = child.stdout.take().unwrap();
-    let mut lines = BufReader::new(out).lines();
-    while let Some(line) = lines.next_line().await? {
-        println!("DBG> {}", line);
-        if let Some(pct) = parse_progress_from_line(&line) {
-            let _ = progress_tx.send(pct);
-        }
-    }
-    Ok(())
-}
-
-/// Fetches thumbnail image
-fn fetch_thumbnail(video_id: &str) -> Option<ColorImage> {
-    let url = format!("https://img.youtube.com/vi/{}/hqdefault.jpg", video_id);
-    let resp = reqwest::blocking::get(&url).ok()?.bytes().ok()?;
-    let img = image::load_from_memory(&resp).ok()?.to_rgba8();
-    let size = [img.width() as usize, img.height() as usize];
-    Some(ColorImage::from_rgba_unmultiplied(size, &img))
-}
