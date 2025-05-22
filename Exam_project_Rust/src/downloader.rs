@@ -15,7 +15,7 @@ pub async fn spawn_download(
     url: String,
     quality: String,
     download_folder: String,
-    progress_tx: UnboundedSender<f32>, // ✅ just progress
+    progress_tx: UnboundedSender<f32>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bin = if cfg!(target_os = "windows") { "yt-dlp.exe" } else { "yt-dlp" };
     let data = Asset::get(bin).ok_or("Missing yt-dlp")?;

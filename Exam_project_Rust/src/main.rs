@@ -52,7 +52,7 @@ struct MyApp {
     downloads: Vec<DownloadTask>,
     thumbnails: HashMap<String, egui::TextureHandle>,
     thumbnail_results: Arc<Mutex<Vec<(String, ColorImage)>>>,
-    progress_rxs: HashMap<String, UnboundedReceiver<f32>>, // ✅ changed from Option<Receiver>
+    progress_rxs: HashMap<String, UnboundedReceiver<f32>>,
 }
 
 impl Default for MyApp {
@@ -71,14 +71,13 @@ impl Default for MyApp {
             downloads: Vec::new(),
             thumbnails: HashMap::new(),
             thumbnail_results: Arc::new(Mutex::new(Vec::new())),
-            progress_rxs: HashMap::new(), // ✅
+            progress_rxs: HashMap::new(),
         }
     }
 }
 
 impl App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        // ✅ 1️⃣ Check all progress channels
         for (id, rx) in self.progress_rxs.iter_mut() {
             while let Ok(prog) = rx.try_recv() {
                 if let Some(task) = self.downloads.iter_mut().find(|t| &t.video_id == id) {
@@ -93,7 +92,7 @@ impl App for MyApp {
             }
         }
 
-        // 2️⃣ Process fetched thumbnails
+        // Process fetched thumbnails
         {
             let mut pending = self.thumbnail_results.lock().unwrap();
             for (vid, img) in pending.drain(..) {
@@ -102,7 +101,7 @@ impl App for MyApp {
             }
         }
 
-        // 3️⃣ Right-side download panel
+        // Right-side download panel
         egui::SidePanel::right("downloads_panel").show(ctx, |ui| {
             ui.heading("Active Downloads");
             ui.separator();
@@ -146,7 +145,7 @@ impl App for MyApp {
                                                 });
                                             }
 
-                                            // ✅ Remove Button
+                                            // Remove Button
                                             if ui.add(egui::Button::new("❌").fill(egui::Color32::RED)).clicked() {
                                                 to_remove.push(task.video_id.clone());
                                             }
@@ -157,7 +156,7 @@ impl App for MyApp {
                         });
                     }
 
-                    // ✅ Actually remove tasks after iterating
+
                     if !to_remove.is_empty() {
                         self.downloads.retain(|t| !to_remove.contains(&t.video_id));
                         for id in to_remove {
@@ -167,7 +166,7 @@ impl App for MyApp {
                 });
         });
 
-        // 4️⃣ Main panel
+        // Main panel
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("YouTube Downloader");
 
@@ -226,7 +225,7 @@ impl App for MyApp {
                             });
                     }
 
-                    // ✅ Create a new progress channel per video_id
+                    //Create a new progress channel per video_id
                     let (tx, rx) = unbounded_channel();
                     self.progress_rxs.insert(video_id.clone(), rx);
 
@@ -250,7 +249,7 @@ impl App for MyApp {
     }
 }
 
-/// Extracts YouTube “v=” ID
+/// Extracts YouTube  video id
 fn extract_video_id(url: &str) -> Option<String> {
     url.split("v=").nth(1).and_then(|s| s.split('&').next()).map(|s| s.to_string())
 }
