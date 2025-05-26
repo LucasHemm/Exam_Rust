@@ -1,13 +1,28 @@
+# Project metadata
 [package]
-name = "Exam_project_Rust"
-version = "0.1.0"
-edition = "2024"
+name = "Exam_project_Rust"      # The name of the crate
+version = "0.1.0"              # Initial version of the project
+edition = "2024"               # Rust edition to use for compiler features
 
+# Third-party dependencies
 [dependencies]
+# GUI framework built on egui for native apps
 eframe = "0.27"
+
+# Asynchronous runtime with multi-threading, macros, and process support
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
+
+# Embeds static assets (e.g., binaries) into the compiled binary
 rust-embed = "8"
+
+# Lazy-initialized globals
 once_cell = "1.19"
+
+# Cross-platform file dialogs
 rfd = "0.7"
+
+# Image decoding and manipulation
 image = "0.24"
+
+# HTTP client; using blocking feature for simple thumbnail fetching
 reqwest = { version = "0.11", features = ["blocking"] }
